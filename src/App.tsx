@@ -111,7 +111,7 @@ function App() {
             <span className="demo-badge">{text.demo}</span>
           </div>
           <p className="eyebrow">{text.event} / 001</p>
-          <h1 id="tournament-title">CKVM <span>40+</span></h1>
+          <h1 id="tournament-title">CMKV <span>40+</span></h1>
           <p className="club-name">{text.club}</p>
         </div>
 
