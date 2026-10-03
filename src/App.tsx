@@ -1,4 +1,84 @@
+import { useEffect, useState } from 'react'
+
+type Language = 'cs' | 'en'
+
+const copy = {
+  cs: {
+    public: 'VEŘEJNÝ PŘEHLED',
+    demo: 'UKÁZKOVÁ DATA',
+    live: 'PROBÍHÁ',
+    club: 'Českomoravský klub veteránů',
+    category: 'KATEGORIE',
+    location: 'MÍSTO',
+    event: 'TURNAJ',
+    liveNow: 'Právě se hraje',
+    matches: 'ZÁPASY',
+    group: 'SKUPINA',
+    table: 'STŮL',
+    set: 'SET',
+    player: 'HRÁČ',
+    sets: 'SETY',
+    currentSet: 'AKTUÁLNÍ SET',
+    footer: 'UKÁZKOVÝ TURNAJ · PRAHA',
+  },
+  en: {
+    public: 'PUBLIC SCOREBOARD',
+    demo: 'SAMPLE DATA',
+    live: 'LIVE',
+    club: 'Czech-Moravian Veterans Club',
+    category: 'CATEGORY',
+    location: 'LOCATION',
+    event: 'EVENT',
+    liveNow: 'Playing now',
+    matches: 'MATCHES',
+    group: 'GROUP',
+    table: 'TABLE',
+    set: 'SET',
+    player: 'PLAYER',
+    sets: 'SETS',
+    currentSet: 'CURRENT SET',
+    footer: 'SAMPLE TOURNAMENT · PRAGUE',
+  },
+} as const
+
+const matches = [
+  {
+    group: 'A',
+    table: 1,
+    set: 4,
+    players: [
+      { name: 'Ladislav Novák', sets: 2, points: 8 },
+      { name: 'Petr Svoboda', sets: 1, points: 6 },
+    ],
+  },
+  {
+    group: 'A',
+    table: 2,
+    set: 3,
+    players: [
+      { name: 'Jiří Dvořák', sets: 1, points: 10 },
+      { name: 'Milan Král', sets: 1, points: 9 },
+    ],
+  },
+  {
+    group: 'B',
+    table: 3,
+    set: 1,
+    players: [
+      { name: 'Karel Černý', sets: 0, points: 5 },
+      { name: 'Pavel Marek', sets: 0, points: 7 },
+    ],
+  },
+]
+
 function App() {
+  const [language, setLanguage] = useState<Language>('cs')
+  const text = copy[language]
+
+  useEffect(() => {
+    document.documentElement.lang = language
+  }, [language])
+
   return (
     <main className="page-shell">
       <header className="topbar">
@@ -6,41 +86,94 @@ function App() {
           <span className="wordmark-mark" aria-hidden="true">T</span>
           <span>TTTS</span>
         </a>
-        <span className="topbar-label">VEŘEJNÝ PŘEHLED</span>
+        <div className="topbar-actions">
+          <span className="topbar-label">{text.public}</span>
+          <div className="language-switch" role="group" aria-label="Language">
+            {(['cs', 'en'] as const).map((option) => (
+              <button
+                aria-pressed={language === option}
+                className={language === option ? 'language-button is-active' : 'language-button'}
+                key={option}
+                onClick={() => setLanguage(option)}
+                type="button"
+              >
+                {option.toUpperCase()}
+              </button>
+            ))}
+          </div>
+        </div>
       </header>
 
-      <section className="intro" aria-labelledby="page-title">
-        <div className="intro-copy">
-          <p className="eyebrow"><span className="status-dot" />TABLE TENNIS TOURNAMENT SYSTEM</p>
-          <h1 id="page-title">Turnaj začíná<br />tady.</h1>
-          <p className="intro-description">Jedno místo pro přehled turnajů, zápasů a výsledků.</p>
+      <section className="tournament-overview" aria-labelledby="tournament-title">
+        <div className="event-copy">
+          <div className="event-flags">
+            <span className="live-badge"><span className="live-dot" />{text.live}</span>
+            <span className="demo-badge">{text.demo}</span>
+          </div>
+          <p className="eyebrow">{text.event} / 001</p>
+          <h1 id="tournament-title">CMKV <span>40+</span></h1>
+          <p className="club-name">{text.club}</p>
         </div>
-        <div className="court-art" aria-hidden="true">
-          <div className="court court-back"><span className="court-net" /><span className="court-center" /></div>
-          <div className="court court-front"><span className="court-net" /><span className="court-center" /></div>
-          <span className="ball ball-coral" />
-          <span className="ball ball-lime" />
+
+        <div className="event-details">
+          <div className="detail-item">
+            <span className="detail-label">{text.category}</span>
+            <strong>40+</strong>
+          </div>
+          <div className="detail-item">
+            <span className="detail-label">{text.location}</span>
+            <strong>{language === 'cs' ? 'Praha' : 'Prague'}</strong>
+          </div>
+          <div className="table-illustration" role="img" aria-label="Table tennis table, top view">
+            <span className="table-doubles-line table-doubles-line-left" />
+            <span className="table-doubles-line table-doubles-line-right" />
+            <span className="table-net" />
+          </div>
         </div>
       </section>
 
-      <section className="live-section" aria-labelledby="live-title">
+      <section className="matches-section" aria-labelledby="matches-title">
         <div className="section-heading">
-          <div><p className="eyebrow">NAŽIVO</p><h2 id="live-title">Právě se hraje</h2></div>
-          <span className="count-label">0 ZÁPASŮ</span>
-        </div>
-        <div className="empty-state">
-          <div className="empty-icon" aria-hidden="true"><span /><span /></div>
           <div>
-            <h3>Zatím žádný rozehraný turnaj</h3>
-            <p>Jakmile budou dostupná turnajová data, zobrazí se tady.</p>
+            <p className="eyebrow">{text.live}</p>
+            <h2 id="matches-title">{text.liveNow}</h2>
           </div>
-          <span className="empty-state-index">TTTS / 001</span>
+          <span className="match-count"><strong>{matches.length}</strong> {text.matches}</span>
+        </div>
+
+        <div className="match-list">
+          {matches.map((match) => (
+            <article className="match-row" key={match.table}>
+              <div className="match-context">
+                <span className="table-number"><span>{text.table}</span>{match.table}</span>
+                <span className="group-label">{text.group} {match.group}</span>
+              </div>
+              <div className="scoreboard">
+                <div className="scoreboard-head">
+                  <span>{text.player}</span>
+                  <span>{text.sets}</span>
+                  <span>{text.set} {match.set}</span>
+                </div>
+                {match.players.map((player, index) => (
+                  <div className={index === 0 ? 'player-score' : 'player-score player-score-last'} key={player.name}>
+                    <span className="player-name">
+                      {index === 0 && <span className="service-dot" aria-label="Podává" />}
+                      {player.name}
+                    </span>
+                    <strong className="sets-score">{player.sets}</strong>
+                    <strong className="points-score">{player.points}</strong>
+                  </div>
+                ))}
+              </div>
+              <span className="match-state"><span className="live-dot" />{text.live}</span>
+            </article>
+          ))}
         </div>
       </section>
 
       <footer className="footer">
-        <span>TTTS <span className="footer-separator">/</span> POČÁTEČNÍ VERZE</span>
-        <span>STOLNÍ TENIS, PŘEHLEDNĚ.</span>
+        <span>TTTS <span className="footer-separator">/</span> {text.demo}</span>
+        <span>{text.footer}</span>
       </footer>
     </main>
   )
