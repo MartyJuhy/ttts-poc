@@ -1,4 +1,4 @@
-name: Build and deploy web
+name: Verify and deploy TTTS
 
 on:
   pull_request:
@@ -11,11 +11,19 @@ permissions:
   id-token: write
 
 jobs:
-  build-and-deploy:
+  verify:
     runs-on: ubuntu-latest
     steps:
       - name: Check out source
         uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Build ASP.NET API
+        run: dotnet test api.Tests/api.Tests.csproj --configuration Release
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -29,13 +37,77 @@ jobs:
       - name: Build React app
         run: npm run build
 
+  deploy:
+    if: >-
+      github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+      vars.GCP_WIF_PROVIDER != '' && vars.GCP_SERVICE_ACCOUNT != '' &&
+      vars.FIREBASE_ADMIN_UID != '' && vars.VITE_FIREBASE_API_KEY != '' &&
+      vars.VITE_FIREBASE_APP_ID != ''
+    needs: verify
+    runs-on: ubuntu-latest
+    env:
+      PROJECT_ID: ttts-poc
+      REGION: europe-west1
+      IMAGE_REPOSITORY: ttts
+      RUNTIME_SERVICE_ACCOUNT: ttts-api-runtime@ttts-poc.iam.gserviceaccount.com
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
       - name: Authenticate to Google Cloud with Workload Identity Federation
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.GCP_WIF_PROVIDER != '' && vars.GCP_SERVICE_ACCOUNT != ''
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
           service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
 
-      - name: Deploy to Firebase Hosting
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.GCP_WIF_PROVIDER != '' && vars.GCP_SERVICE_ACCOUNT != ''
-        run: npx --yes firebase-tools deploy --only hosting --project ttts-poc --non-interactive
+      - name: Configure Artifact Registry Docker auth
+        run: gcloud auth configure-docker "$REGION-docker.pkg.dev" --quiet
+
+      - name: Build and publish API image
+        run: |
+          image="$REGION-docker.pkg.dev/$PROJECT_ID/$IMAGE_REPOSITORY/ttts-api:$GITHUB_SHA"
+          docker build --tag "$image" api
+          docker push "$image"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+        id: api-image
+
+      - name: Deploy API to Cloud Run
+        env:
+          ADMIN_UID: ${{ vars.FIREBASE_ADMIN_UID }}
+        run: |
+          gcloud run deploy ttts-api \
+            --project="$PROJECT_ID" \
+            --region="$REGION" \
+            --image="${{ steps.api-image.outputs.image }}" \
+            --service-account="$RUNTIME_SERVICE_ACCOUNT" \
+            --allow-unauthenticated \
+            --min=0 \
+            --max=3 \
+            --set-env-vars="FIREBASE_PROJECT_ID=$PROJECT_ID,DATA_PROVIDER=firestore,ADMIN_UID=$ADMIN_UID,CORS_ORIGINS=https://ttts-poc.web.app"
+
+      - name: Read Cloud Run API URL
+        id: api-url
+        run: |
+          url="$(gcloud run services describe ttts-api --project="$PROJECT_ID" --region="$REGION" --format='value(status.url)')"
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install web dependencies
+        run: npm ci
+
+      - name: Build web with deployed API URL
+        env:
+          VITE_API_BASE_URL: ${{ steps.api-url.outputs.url }}
+          VITE_FIREBASE_API_KEY: ${{ vars.VITE_FIREBASE_API_KEY }}
+          VITE_FIREBASE_AUTH_DOMAIN: ttts-poc.firebaseapp.com
+          VITE_FIREBASE_PROJECT_ID: ttts-poc
+          VITE_FIREBASE_APP_ID: ${{ vars.VITE_FIREBASE_APP_ID }}
+        run: npm run build
+
+      - name: Deploy web to Firebase Hosting
+        run: npx --yes firebase-tools deploy --only hosting --project "$PROJECT_ID" --non-interactive

@@ -9,8 +9,12 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "firebase": "^12.19.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1"
+  },
+  "overrides": {
+    "@grpc/grpc-js": "^1.14.5"
   },
   "devDependencies": {
     "@types/react": "^19.1.10",
