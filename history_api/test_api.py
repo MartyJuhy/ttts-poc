@@ -181,6 +181,121 @@ class HistoryApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(all(player["id"] in (item["player1"]["id"], item["player2"]["id"]) for item in response.json()["items"]))
 
+    def chat(self, message: str, **filters: int) -> dict:
+        response = self.client.post("/api/history/chat", json={"message": message, **filters})
+        self.assertEqual(response.status_code, 200)
+        return response.json()
+
+    def pair_with_distinct_surnames(self) -> tuple[dict, dict]:
+        """Return the two players of one seeded match, whose surnames differ."""
+        item = next(
+            item
+            for item in self.client.get("/api/history/matches", params={"limit": 500}).json()["items"]
+            if item["player1"]["name"].split()[-1] != item["player2"]["name"].split()[-1]
+        )
+        return item["player1"], item["player2"]
+
+    def test_chat_head_to_head_returns_only_matches_between_the_two_players(self) -> None:
+        first, second = self.pair_with_distinct_surnames()
+
+        result = self.chat(f"{first['name']} vs {second['name']}")
+
+        self.assertTrue(result["matches"])
+        self.assertIn("Vzájemná bilance", result["reply"])
+        for item in result["matches"]:
+            self.assertEqual({item["player1"]["id"], item["player2"]["id"]}, {first["id"], second["id"]})
+
+    def test_chat_head_to_head_lists_all_players_sharing_a_surname(self) -> None:
+        players = self.client.get("/api/history/players").json()
+        by_surname: dict[str, list[dict]] = {}
+        for player in players:
+            by_surname.setdefault(player["name"].split()[-1], []).append(player)
+        shared = {surname: group for surname, group in by_surname.items() if len(group) > 1}
+        self.assertTrue(shared)
+
+        # Find a match between a player with a shared surname and an opponent with another surname.
+        for item in self.client.get("/api/history/matches", params={"limit": 500}).json()["items"]:
+            for own, opponent in ((item["player1"], item["player2"]), (item["player2"], item["player1"])):
+                surname = own["name"].split()[-1]
+                if surname in shared and surname != opponent["name"].split()[-1]:
+                    group = shared[surname]
+                    result = self.chat(f"{surname} vs {opponent['name']}")
+                    for member in group:
+                        self.assertIn(member["name"], result["reply"])
+                    ids = {member["id"] for member in group}
+                    self.assertIn(item["id"], {match["id"] for match in result["matches"]})
+                    for match in result["matches"]:
+                        pair = {match["player1"]["id"], match["player2"]["id"]}
+                        self.assertIn(opponent["id"], pair)
+                        self.assertTrue(pair & ids)
+                    return
+        self.fail("no match with a shared surname found")
+
+    def test_chat_uses_selected_player_filter_as_first_side_of_head_to_head(self) -> None:
+        first, second = self.pair_with_distinct_surnames()
+
+        result = self.chat(f"jak hrál proti {second['name']}", player_id=first["id"])
+
+        self.assertIn("Vzájemná bilance", result["reply"])
+        for item in result["matches"]:
+            self.assertEqual({item["player1"]["id"], item["player2"]["id"]}, {first["id"], second["id"]})
+
+    def test_chat_ambiguous_surname_only_lists_players_active_in_selected_year(self) -> None:
+        players = {p["id"]: p["name"] for p in self.client.get("/api/history/players").json()}
+        surnames = [name.split()[-1] for name in players.values()]
+        year = self.client.get("/api/history/years").json()[0]
+        items = self.client.get("/api/history/matches", params={"year": year, "limit": 2000}).json()["items"]
+        active = {i["player1"]["id"] for i in items} | {i["player2"]["id"] for i in items}
+        surname = next(
+            s
+            for s in set(surnames)
+            if surnames.count(s) > 1
+            and 1 < sum(1 for pid, n in players.items() if n.split()[-1] == s and pid in active) < surnames.count(s)
+        )
+        inactive = [n for pid, n in players.items() if n.split()[-1] == surname and pid not in active]
+
+        result = self.chat(f"Jak hrál {surname}?", year=year)
+
+        self.assertIn(str(year), result["reply"])
+        for name in inactive:
+            self.assertNotIn(name, result["reply"])
+
+    def test_chat_ambiguous_surname_shows_matches_of_all_and_lists_candidates(self) -> None:
+        players = self.client.get("/api/history/players").json()
+        surnames = [player["name"].split()[-1] for player in players]
+        surname = next(name for name in surnames if surnames.count(name) > 1)
+        group_ids = {p["id"] for p in players if p["name"].split()[-1] == surname}
+
+        result = self.chat(f"Jak hrál {surname}?")
+
+        self.assertIn("jsem našel", result["reply"])
+        self.assertTrue(result["matches"])
+        for item in result["matches"]:
+            self.assertTrue({item["player1"]["id"], item["player2"]["id"]} & group_ids)
+
+    def test_chat_first_name_only_finds_matches_of_all_players_with_it(self) -> None:
+        players = self.client.get("/api/history/players").json()
+        surnames = {p["name"].split()[-1] for p in players}
+        first_names = [p["name"].split()[0] for p in players]
+        first = next(n for n in first_names if first_names.count(n) > 1 and n not in surnames)
+        group_ids = {p["id"] for p in players if p["name"].split()[0] == first}
+
+        result = self.chat(f"Jak hrál {first}?")
+
+        self.assertIn("jsem našel", result["reply"])
+        self.assertTrue(result["matches"])
+        for item in result["matches"]:
+            self.assertTrue({item["player1"]["id"], item["player2"]["id"]} & group_ids)
+
+    def test_chat_full_name_works_in_both_orders(self) -> None:
+        player = self.client.get("/api/history/players").json()[0]
+        first, last = player["name"].split()[0], player["name"].split()[-1]
+
+        for text in (f"{first} {last}", f"{last} {first}"):
+            result = self.chat(text)
+            self.assertTrue(result["matches"], text)
+            self.assertIn(player["name"], result["reply"])
+
     def test_chat_answers_with_seeded_player_results(self) -> None:
         response = self.client.post(
             "/api/history/chat",

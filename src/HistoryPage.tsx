@@ -1,4 +1,6 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
+
+const PAGE_SIZE = 10
 
 interface Player {
   id: number
@@ -70,13 +72,22 @@ const translations = {
     winner: 'VÍTĚZ',
     round: 'FÁZE',
     chatTitle: 'Chat nad výsledky',
-    chatIntro: 'Zeptejte se například: „Jaké zápasy odehrál Jan Novák?“',
     chatPlaceholder: 'Napište dotaz k výsledkům…',
     send: 'Odeslat',
     thinking: 'Hledám v historických výsledcích…',
     chatError: 'Dotaz se nepodařilo zpracovat. Zkontrolujte připojení k API.',
     emptyChat: 'Zatím žádné zprávy. Zkuste se zeptat na zápasy hráče.',
     sets: 'Sety',
+    prevPage: 'Předchozí',
+    nextPage: 'Další',
+    pageOf: 'Strana',
+    pagination: 'Stránkování zápasů',
+    helpTitle: 'Jak hledat',
+    helpPlayerLabel: 'Zápasy hráče',
+    helpPlayerExample: 'Jak hrál Jan Novák?',
+    helpH2hLabel: 'Head-to-head',
+    helpH2hExample: 'Novák vs Beneš',
+    helpHint: 'Kliknutím vložíte příklad do dotazu.',
   },
   en: {
     live: 'Live',
@@ -100,13 +111,22 @@ const translations = {
     winner: 'WINNER',
     round: 'ROUND',
     chatTitle: 'Results chat',
-    chatIntro: 'Try asking: “Which matches did Jan Novak play?”',
     chatPlaceholder: 'Ask about match results…',
     send: 'Send',
     thinking: 'Searching historical results…',
     chatError: 'Could not process the question. Check the API connection.',
     emptyChat: 'No messages yet. Ask about a player’s matches.',
     sets: 'Sets',
+    prevPage: 'Previous',
+    nextPage: 'Next',
+    pageOf: 'Page',
+    pagination: 'Match pagination',
+    helpTitle: 'How to search',
+    helpPlayerLabel: 'Player matches',
+    helpPlayerExample: 'How did Jan Novak play?',
+    helpH2hLabel: 'Head-to-head',
+    helpH2hExample: 'Novak vs Benes',
+    helpHint: 'Click an example to put it into the question.',
   },
 } as const
 
@@ -160,7 +180,19 @@ export default function HistoryPage() {
   const [chatInput, setChatInput] = useState('')
   const [chatLoading, setChatLoading] = useState(false)
   const [messages, setMessages] = useState<ChatMessage[]>([])
+  const [pageState, setPageState] = useState({ key: '', page: 1 })
+  const chatMessagesRef = useRef<HTMLDivElement>(null)
   const text = translations[language]
+
+  // The page resets to 1 whenever the filters change, without an extra fetch.
+  const filterKey = [selectedYear, selectedTournament, selectedPlayer, selectedOpponent, search.trim()].join('|')
+  const page = pageState.key === filterKey ? pageState.page : 1
+  const pageCount = Math.max(1, Math.ceil(matches.total / PAGE_SIZE))
+
+  useEffect(() => {
+    const container = chatMessagesRef.current
+    if (container) container.scrollTop = container.scrollHeight
+  }, [messages, chatLoading])
 
   useEffect(() => {
     document.documentElement.lang = language
@@ -197,7 +229,7 @@ export default function HistoryPage() {
 
   useEffect(() => {
     const controller = new AbortController()
-    const params = new URLSearchParams({ limit: '2000' })
+    const params = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String((page - 1) * PAGE_SIZE) })
     if (selectedYear) params.set('year', selectedYear)
     if (selectedTournament) params.set('tournament_id', selectedTournament)
     if (selectedPlayer) params.set('player_id', selectedPlayer)
@@ -217,7 +249,7 @@ export default function HistoryPage() {
         if (!controller.signal.aborted) setLoading(false)
       })
     return () => controller.abort()
-  }, [selectedYear, selectedTournament, selectedPlayer, selectedOpponent, search])
+  }, [selectedYear, selectedTournament, selectedPlayer, selectedOpponent, search, page])
 
   function clearFilters() {
     setSelectedYear('')
@@ -367,6 +399,28 @@ export default function HistoryPage() {
             {!loading && !error && matches.items.length === 0 && <p className="history-notice">{text.noResults}</p>}
             {!loading && matches.items.map((match) => <MatchCard key={match.id} labels={text} match={match} />)}
           </div>
+
+          {matches.total > PAGE_SIZE && (
+            <nav className="history-pager" aria-label={text.pagination}>
+              <button
+                className="text-button"
+                disabled={page <= 1 || loading}
+                onClick={() => setPageState({ key: filterKey, page: page - 1 })}
+                type="button"
+              >
+                ← {text.prevPage}
+              </button>
+              <span>{text.pageOf} <strong>{page}</strong> / {pageCount}</span>
+              <button
+                className="text-button"
+                disabled={page >= pageCount || loading}
+                onClick={() => setPageState({ key: filterKey, page: page + 1 })}
+                type="button"
+              >
+                {text.nextPage} →
+              </button>
+            </nav>
+          )}
         </section>
 
         <aside className="history-chat" aria-label={text.chatTitle}>
@@ -374,8 +428,22 @@ export default function HistoryPage() {
             <p className="eyebrow">TTTS / CHAT</p>
             <h2>{text.chatTitle}</h2>
           </div>
-          <div className="history-chat-messages" aria-live="polite">
-            {messages.length === 0 && <p className="chat-empty">{text.emptyChat}<span>{text.chatIntro}</span></p>}
+          <div className="history-chat-help">
+            <p className="history-chat-help-title">{text.helpTitle}</p>
+            <ul>
+              <li>
+                <span>{text.helpPlayerLabel}</span>
+                <button onClick={() => setChatInput(text.helpPlayerExample)} type="button">{text.helpPlayerExample}</button>
+              </li>
+              <li>
+                <span>{text.helpH2hLabel}</span>
+                <button onClick={() => setChatInput(text.helpH2hExample)} type="button">{text.helpH2hExample}</button>
+              </li>
+            </ul>
+            <p className="history-chat-help-hint">{text.helpHint}</p>
+          </div>
+          <div className="history-chat-messages" aria-live="polite" ref={chatMessagesRef}>
+            {messages.length === 0 && <p className="chat-empty">{text.emptyChat}</p>}
             {messages.map((message, index) => (
               <div className={`chat-message is-${message.role}`} key={`${message.role}-${index}`}>
                 <p>{message.text}</p>
