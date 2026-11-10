@@ -197,7 +197,7 @@ export default function HistoryPage() {
 
   useEffect(() => {
     const controller = new AbortController()
-    const params = new URLSearchParams()
+    const params = new URLSearchParams({ limit: '2000' })
     if (selectedYear) params.set('year', selectedYear)
     if (selectedTournament) params.set('tournament_id', selectedTournament)
     if (selectedPlayer) params.set('player_id', selectedPlayer)
