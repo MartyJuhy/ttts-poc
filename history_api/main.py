@@ -1,11 +1,13 @@
+import re
 import unicodedata
+from dataclasses import dataclass
 from datetime import date
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from sqlalchemy import Select, select
+from sqlalchemy import Select, and_, or_, select
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from history_api.database import get_session
@@ -126,6 +128,91 @@ def match_statement(
     return statement
 
 
+@dataclass
+class Mention:
+    """One player reference in a chat message; several candidates when the name is not unique."""
+
+    label: str
+    players: list[Player]
+
+
+def find_mentions(message: str, players: list[Player]) -> list[Mention]:
+    tokens = re.findall(r"\w+", normalize(message))
+    used: set[int] = set()
+    mentions: list[Mention] = []
+
+    # Full names ("first last" or "last first") are unambiguous references.
+    for start in range(len(tokens) - 1):
+        if start in used or start + 1 in used:
+            continue
+        pair = (tokens[start], tokens[start + 1])
+        matching = [
+            player
+            for player in players
+            if pair in {
+                (normalize(player.first_name), normalize(player.last_name)),
+                (normalize(player.last_name), normalize(player.first_name)),
+            }
+        ]
+        if matching:
+            used.update((start, start + 1))
+            mentions.append(Mention(f"{matching[0].first_name} {matching[0].last_name}", matching))
+
+    # A bare surname may belong to several players; all of them become candidates.
+    # Only when no surname matches is the word tried as a first name.
+    for index, token in enumerate(tokens):
+        if index in used:
+            continue
+        matching = [player for player in players if normalize(player.last_name) == token]
+        label_of = lambda player: player.last_name  # noqa: E731
+        if not matching:
+            matching = [player for player in players if normalize(player.first_name) == token]
+            label_of = lambda player: player.first_name  # noqa: E731
+        if matching:
+            used.add(index)
+            mentions.append(Mention(label_of(matching[0]), matching))
+
+    unique: list[Mention] = []
+    seen: set[frozenset[int]] = set()
+    for mention in mentions:
+        key = frozenset(player.id for player in mention.players)
+        if key not in seen:
+            seen.add(key)
+            unique.append(mention)
+    return unique
+
+
+def full_name(player: Player) -> str:
+    return f"{player.first_name} {player.last_name}"
+
+
+def head_to_head_reply(first: Mention, second: Mention, records: list[Match]) -> str:
+    parts: list[str] = []
+    for mention in (first, second):
+        if len(mention.players) > 1:
+            names = ", ".join(full_name(player) for player in mention.players)
+            parts.append(f"Pod jménem „{mention.label}“ je více hráčů ({names}), zobrazuji všechny.")
+
+    wins: dict[tuple[int, int], dict[int, int]] = {}
+    for record in records:
+        pair = (min(record.player1_id, record.player2_id), max(record.player1_id, record.player2_id))
+        pair_wins = wins.setdefault(pair, {pair[0]: 0, pair[1]: 0})
+        pair_wins[record.winner_id] += 1
+
+    people = {player.id: player for mention in (first, second) for player in mention.players}
+    summaries = []
+    for (low, high), pair_wins in sorted(wins.items()):
+        total = pair_wins[low] + pair_wins[high]
+        summaries.append(
+            f"{full_name(people[low])} {pair_wins[low]}:{pair_wins[high]} {full_name(people[high])} ({total} z.)"
+        )
+    if not summaries:
+        parts.append(f"{first.label} a {second.label} spolu v tomto výběru nehráli.")
+    else:
+        parts.append("Vzájemná bilance: " + "; ".join(summaries) + ".")
+    return " ".join(parts)
+
+
 def create_app() -> FastAPI:
     app = FastAPI(title="TTTS Historical Results API", version="0.1.0")
     app.add_middleware(
@@ -221,41 +308,90 @@ def create_app() -> FastAPI:
         request: ChatRequest,
         session: Annotated[Session, Depends(get_session)],
     ) -> ChatResponse:
-        normalized_message = normalize(request.message)
-        players_in_message = [
-            item
-            for item in session.scalars(select(Player))
-            if normalize(f"{item.first_name} {item.last_name}") in normalized_message
-        ]
+        all_players = list(session.scalars(select(Player)))
+        mentions = find_mentions(request.message, all_players)
+
+        if request.year is not None or request.tournament_id is not None:
+            scope = match_statement(request.year, request.tournament_id, None, None).subquery()
+            active_ids = set(session.scalars(select(scope.c.player1_id))) | set(
+                session.scalars(select(scope.c.player2_id))
+            )
+            scoped: list[Mention] = []
+            for mention in mentions:
+                active = [p for p in mention.players if p.id in active_ids]
+                if active:
+                    scoped.append(Mention(mention.label, active))
+            if mentions and not scoped:
+                period = f" v roce {request.year}" if request.year else " ve vybraném turnaji"
+                return ChatResponse(
+                    reply=f"Hráče z dotazu jsem{period} mezi odehranými zápasy nenašel. Zkuste jiný rok.",
+                    matches=[],
+                )
+            mentions = scoped
 
         if request.player_id is not None:
-            player = session.get(Player, request.player_id)
-            selected_players = [player] if player else []
-        else:
-            selected_players = players_in_message
+            selected = session.get(Player, request.player_id)
+            if selected is None:
+                mentions = []
+            else:
+                others = [m for m in mentions if all(p.id != selected.id for p in m.players)]
+                mentions = [Mention(full_name(selected), [selected]), *others]
 
-        if not selected_players:
+        if not mentions:
             return ChatResponse(
-                reply="Nenašel jsem jednoznačné jméno hráče. Zkuste například „Jaké zápasy odehrál Jan Novák?“",
+                reply=(
+                    "Nenašel jsem jednoznačné jméno hráče. Zkuste například „Jaké zápasy odehrál Jan Novák?“ "
+                    "nebo „Novák vs Svoboda“."
+                ),
                 matches=[],
             )
-        if len(selected_players) > 1:
-            names = ", ".join(f"{item.first_name} {item.last_name}" for item in selected_players)
+        if len(mentions) > 2:
+            names = ", ".join(mention.label for mention in mentions)
             return ChatResponse(reply=f"V dotazu jsem našel více hráčů: {names}. Upřesněte prosím, kterého myslíte.", matches=[])
 
-        player = selected_players[0]
-        records = list(
-            session.scalars(
-                match_statement(request.year, request.tournament_id, player.id, None).limit(200)
-            ).unique()
+        if len(mentions) == 2:
+            first, second = mentions
+            first_ids = [player.id for player in first.players]
+            second_ids = [player.id for player in second.players]
+            statement = match_statement(request.year, request.tournament_id, None, None).where(
+                or_(
+                    and_(Match.player1_id.in_(first_ids), Match.player2_id.in_(second_ids)),
+                    and_(Match.player1_id.in_(second_ids), Match.player2_id.in_(first_ids)),
+                )
+            )
+            records = list(session.scalars(statement.limit(500)).unique())
+            return ChatResponse(
+                reply=head_to_head_reply(first, second, records),
+                matches=[build_match_response(item) for item in records],
+            )
+
+        mention = mentions[0]
+        player_ids = [item.id for item in mention.players]
+        limit = 200
+        statement = match_statement(request.year, request.tournament_id, None, None).where(
+            or_(Match.player1_id.in_(player_ids), Match.player2_id.in_(player_ids))
         )
+        records = list(session.scalars(statement.limit(limit + 1)).unique())
+        truncated = len(records) > limit
+        records = records[:limit]
         response_matches = [build_match_response(item) for item in records]
-        name = f"{player.first_name} {player.last_name}"
-        if not response_matches:
-            reply = f"Pro hráče {name} jsem v tomto výběru žádné zápasy nenašel."
+        year_text = f" v roce {request.year}" if request.year else ""
+
+        if len(mention.players) == 1:
+            name = full_name(mention.players[0])
+            if not response_matches:
+                reply = f"Pro hráče {name} jsem v tomto výběru žádné zápasy nenašel."
+            else:
+                reply = f"Zde jsou zápasy hráče {name}{year_text} ({len(response_matches)}):"
         else:
-            year_text = f" v roce {request.year}" if request.year else ""
-            reply = f"Zde jsou zápasy hráče {name}{year_text} ({len(response_matches)}):"
+            names = ", ".join(full_name(item) for item in mention.players)
+            reply = (
+                f"Pod „{mention.label}“{year_text} jsem našel {len(mention.players)} hráčů: {names}. "
+                f"Zobrazuji zápasy všech ({len(response_matches)}"
+                f"{'+, zobrazeno prvních ' + str(limit) if truncated else ''}). "
+                "Chcete-li to zúžit, upřesněte jméno a příjmení, např. „"
+                f"{full_name(mention.players[0])}“."
+            )
         return ChatResponse(reply=reply, matches=response_matches)
 
     return app
