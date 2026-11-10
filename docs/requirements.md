@@ -4,13 +4,14 @@
 
 ## 1. Přehled
 
-TTTS je PoC platforma pro řízení turnajů ve stolním tenise a poskytování historických dat pro analytiku. Skládá se z těchto částí:
+TTTS je PoC platforma pro řízení turnajů ve stolním tenise a poskytování historických dat pro analytiku a konverzační AI. Skládá se z těchto částí:
 
 1. **Webová aplikace** — veřejná část pro sledování turnajů a přihlášená admin část pro správu hráčů, turnajů a zápasů.
 2. **Mobilní aplikace pro rozhodčí** (Android + iOS) — u stolu pouze sledování a editace přiděleného zápasu, zejména přidávání bodů.
 3. **Analytická AI/ML část** — historie utkání, statistiky hráčů, vzájemné zápasy a predikce budoucích zápasů.
 4. **Samostatná sázková webová aplikace** — oddělený PoC klient s vlastním přihlášením, který zobrazuje vybrané zápasy/predikce a umožňuje uživateli vytvořit sázku.
-5. **Experimentální multi-agentní AI část** — sada spolupracujících agentů pro dotazy nad historií, statistikami a predikcemi, orchestrated pomocí Semantic Kernel.
+5. **AI chat na webu** — samostatná Python služba pro konverzační dotazy nad historií turnajů, hráčů, zápasů, výsledků, statistikami a predikcemi; workflow řídí LangChain a LangGraph.
+6. **Live predikce zápasů** — samostatná .NET/C# analytická služba používající Semantic Kernel k orchestraci kontextu a nástrojů pro průběžný odhad výsledku rozehraného zápasu.
 
 Součástí platformy je také centrální registr hráčů v rámci organizací. Hráč má dlouhodobý profil, který lze použít ve více turnajích; turnaj se nesmí účastnit anonymní nebo pouze jednorázově zadaný hráč.
 
@@ -23,7 +24,8 @@ TTTS a analytická část běží jako distribuovaný cloud-native systém na GC
 - Služby spolu komunikují synchronně přes interní API pouze tam, kde je nutná okamžitá odpověď; doménové události a analytická data se předávají asynchronně přes Pub/Sub.
 - Každá služba má vlastní Docker image, konfiguraci, health-checky, logování, metriky a Kubernetes deployment.
 - Systém musí tolerovat dočasný výpadek jednotlivé nedůležité služby; analytika nesmí blokovat zápis skóre a sázkový systém nesmí blokovat turnajový provoz.
-- Multi-agentní AI je experimentální a není v kritické cestě turnaje, zápisu skóre ani vypořádání sázky.
+- AI chat a agentní workflow jsou oddělené od kritické cesty turnaje, zápisu skóre i sázkové aplikace; jejich výpadek nesmí omezit běžné používání webu.
+- Live predikce jsou pomocná analytická funkce; jejich výpočet ani výpadek nesmí blokovat nebo měnit oficiální zápis skóre a výsledek zápasu.
 
 ### 1.2 Hranice PoC
 
@@ -178,26 +180,40 @@ Profil hráče navíc zpřístupňuje analytický přehled výkonu: bilanci výh
 - Analytická služba udržuje čtecí modely pro rychlé zobrazení statistik v analytickém přehledu a v profilu hráče; tyto modely lze znovu vytvořit z archivovaných výsledků.
 - Přepočet statistik je idempotentní a po opravě oficiálního výsledku musí označit nebo aktualizovat dotčené agregace.
 - ML služba vytváří predikce následujících zápasů na základě historických utkání a dalších schválených vstupů; predikce jsou označené jako odhad, obsahují čas/model/verzi a nesmí měnit oficiální výsledek zápasu.
+- Pro rozehraný zápas lze průběžně odhadovat pravděpodobnost výhry hráčů podle aktuálního skóre/setu, dosavadního průběhu a dostupných historických statistik. Odhad se aktualizuje po relevantní změně live stavu a je označen jako predikce, nikoli oficiální stav nebo záruka výsledku.
+- Semantic Kernel v samostatné .NET službě orchestruje načtení povolených vstupů, volání analytického/predikčního výpočtu a sestavení strukturovaného výsledku. Samotný algoritmus nebo ML model zajišťuje analytická komponenta; Semantic Kernel není predikční model.
+- Live predikce obsahuje identifikaci zápasu, pravděpodobnosti pro oba hráče (součet 100 % s definovaným zaokrouhlením), čas výpočtu, verzi modelu/algoritmu a informaci o kvalitě či nedostatku vstupních dat. Nesmí měnit skóre ani oficiální výsledek.
+- Výpočet predikce je asynchronní nebo časově omezený, má definovanou frekvenci aktualizace a pracuje s poslední platnou verzí live skóre; zastaralá predikce se na webu viditelně označí.
 - Výpočty statistik a predikcí probíhají asynchronně a nesmí blokovat zápis live skóre ani dokončení turnaje.
 - Data pro samostatnou sázkovou webovou aplikaci se poskytují přes samostatné, verzované integrační API a/nebo Pub/Sub události s řízeným přístupem. Minimální datový tok obsahuje nabídku zápasu, účastníky, stav zápasu, schválené statistiky a predikci.
 - Sázková aplikace má vlastní autentizaci uživatelů a vlastní doménu pro uživatele, sázky a jejich stav; TTTS v ní neprovádí sázky, platby ani vypořádání.
 - Integrace musí respektovat oprávnění organizace, ochranu osobních údajů, audit přístupů a možnost revokace přístupu.
 
-### 5.6 Multi-agentní AI a Semantic Kernel (experimentální PoC)
-- Agent Orchestration Service je samostatná mikroservisa provozovaná jako Docker image v Kubernetes/GKE.
-- Orchestrátor používá Semantic Kernel jako aplikační framework pro registraci nástrojů/plugins, plánování workflow, předávání kontextu a koordinaci agentů.
-- PoC obsahuje minimálně Orchestrator, Player History, Head-to-Head, Statistics, Prediction a Explanation agenta.
-- Orchestrator Agent rozpozná záměr dotazu a koordinuje ostatní agenty.
-- Player History Agent vyhledá účasti hráče, archivované turnaje a historická utkání.
-- Head-to-Head Agent sestaví vzájemnou bilanci dvou hráčů a chronologický přehled jejich zápasů.
-- Statistics Agent načte nebo spočítá schválené statistiky, formu, sety a body.
-- Prediction Agent načte predikci z Analytics/ML služby a nesmí ji vydávat za oficiální výsledek.
-- Explanation Agent připraví odpověď včetně zdrojových zápasů, času výpočtu a nejistoty.
-- Agentům jsou dostupné pouze explicitně definované read-only nástroje přes API kontrakty, například `getPlayerProfile`, `getMatchHistory`, `getHeadToHead`, `getPlayerStatistics` a `getPrediction`.
-- Agenti nesmí přímo zapisovat do databází ani volat mutační operace scoringu, turnajů, hráčů nebo sázek. Každý nástroj musí vynucovat tenant, oprávnění a audit.
-- Odpověď agenta musí odlišit historická data, statistický výpočet, ML predikci a jazykové vysvětlení. Při nedostatku dat nesmí agent údaje domýšlet.
-- Každé agentní workflow se loguje s identitou uživatele, použitými nástroji, verzí promptu/modelu, časem, výsledkem a případnou chybou.
-- První PoC workflow: uživatel otevře profil hráče nebo zápas a požádá o shrnutí formy, vzájemných zápasů a faktorů použitých pro predikci. Výstup je informační, nikoli garance výsledku nebo doporučení sázky.
+### 5.6 Webový AI chat a agentní workflow (experimentální PoC)
+- Ve veřejné části webu je dostupný chatovací klient jako plovoucí widget v pravém dolním rohu; uživatel jej může otevřít z přehledu turnajů, profilu hráče i detailu zápasu.
+- Chat odpovídá na dotazy o hráčích, turnajích, zápasech, výsledcích, průběhu zápasu (včetně dostupných bodových/setových dat), statistikách, formě, vzájemných zápasech a schválených predikcích.
+- Archiv TTTS uchovává historické turnaje, hráče, zápasy, oficiální výsledky a dostupný průběh bod po bodu. Archivní doménová data zůstávají zdrojem pravdy; chat k nim přistupuje přes autorizované API a čtecí modely, nikoli přímým přístupem do databází.
+- Pro právě probíhající utkání může chat zobrazit aktuální skóre z live projekce. Odpovědi musí uvádět, zda pracují s živým nebo archivním stavem, a zobrazit čas poslední aktualizace, pokud je znám.
+- Agent Orchestration Service je samostatná mikroservisa provozovaná jako Docker image v Kubernetes/GKE. LangChain poskytuje integraci modelu, promptů, retrieverů a nástrojů; LangGraph řídí stavové workflow, větvení, předávání mezi agenty a případná opakování.
+- PoC předvede orchestrace alespoň pro rozpoznání záměru, dohledání hráče/turnaje/zápasu, statistický nebo vzájemný přehled, načtení predikce a sestavení vysvětlené odpovědi.
+- Strukturovaná fakta (výsledky, skóre, statistiky) se načítají z doménových API/čtecích modelů. RAG a vektorové úložiště slouží pro relevantní doprovodný text, například pravidla, vysvětlení metrik a dokumentaci; nesmí nahrazovat ani přepisovat oficiální výsledky.
+- Nástroje agentů mají explicitní kontrakty a read-only oprávnění. Jejich zpřístupnění přes MCP-kompatibilní server/adaptér umožní standardizovanou integraci; příklady nástrojů jsou `getPlayerProfile`, `getTournament`, `getMatch`, `getMatchHistory`, `getHeadToHead`, `getPlayerStatistics` a `getPrediction`.
+- Agenti nesmí přímo zapisovat do databází ani volat mutační operace scoringu, turnajů, hráčů nebo sázek. Každý nástroj vynucuje tenant, oprávnění, limity a audit.
+- Prompt engineering je součástí PoC: systémové instrukce a šablony promptů jsou verzované a testované. Odpověď uvádí zdroje/použité zápasy a rozlišuje ověřená historická data, živá data, výpočty, ML predikce a jazykové vysvětlení. Při nedostatku dat nesmí agent údaje domýšlet.
+- Chat podporuje kontext aktuální konverzace a historii konverzací navázanou na uživatele nebo anonymní relaci. Uživatel může historii zobrazit a smazat; její uchování, expirace a přístup podléhají pravidlům ochrany osobních údajů.
+- Architektura umožňuje opt-in upozornění na relevantní události (například změnu stavu sledovaného zápasu nebo dokončení predikce) a automatizaci bezpečných informačních workflow. Upozornění nesmí bez souhlasu uživatele odhalovat soukromá data ani provádět změny v turnaji.
+- Chat je dostupný jako funkce webu kdykoli, kdy je web a AI služba dostupná; při nedostupnosti modelu nebo nástroje zobrazí srozumitelnou chybu a běžné funkce webu zůstávají dostupné.
+- Každé agentní workflow se loguje s identitou nebo identifikátorem relace, použitými nástroji, verzí promptu/modelu, časem, výsledkem a případnou chybou. Logování nesmí bez potřeby uchovávat citlivý obsah konverzace.
+- První PoC workflow: uživatel se z detailu hráče nebo zápasu zeptá na shrnutí formy, vzájemných zápasů a faktorů použité predikce. Výstup je informační, nikoli garance výsledku nebo doporučení sázky.
+
+### 5.7 .NET Semantic Kernel a live predikce zápasu (experimentální PoC)
+- Predikční/orchestrační komponenta je samostatná .NET/C# služba s vlastním Docker image a nasazením v GKE; zachovává .NET jako primární platformu backendu a používá Semantic Kernel.
+- Služba přijímá nebo načítá autorizovaný live snapshot rozehraného zápasu, historické statistiky a vzájemné zápasy přes verzované API/události. Nemá přímý zápis do databáze zápasů ani skóre.
+- Semantic Kernel koordinuje kroky workflow a volání explicitně registrovaných read-only funkcí. Odhad pravděpodobnosti dodává samostatný deterministický výpočet nebo verzovaný ML model, nikoli samotný jazykový model.
+- Po změně live skóre může služba aktualizovat odhad, například pravděpodobnost výhry každého hráče. Aktualizace nesmí zpomalit scoring; při nedostupnosti služby zůstávají skóre i běžné webové funkce dostupné.
+- Výsledek obsahuje zápas, oba hráče, odhadované pravděpodobnosti, použitý live stav, čas výpočtu, verzi algoritmu/modelu, případně nejistotu a upozornění, pokud jsou vstupy neúplné nebo zastaralé.
+- Odhady jsou pouze informativní, nesmějí být prezentovány jako oficiální výsledek, jistota výhry ani doporučení k sázce. Oprava skóre musí umožnit přepočet predikce s novým vstupem.
+- .NET/Semantic Kernel predikční služba a Python/LangChain/LangGraph chat jsou samostatné nasaditelné služby s odlišnou odpovědností. Chat může predikci načíst přes read-only API, ale neimplementuje její výpočet ani nepřebírá její zdroj pravdy.
 
 ## 6. Nefunkční požadavky
 
@@ -211,6 +227,8 @@ Profil hráče navíc zpřístupňuje analytický přehled výkonu: bilanci výh
 - **Architektura a provoz**: systém je distribuovaný a backend je rozdělen do samostatně nasaditelných doménových mikroservis. Každá služba je distribuována jako Docker image a provozována na Kubernetes v GCP; služby musí mít health-checky, logování, metriky a řízené škálování.
 - **Oddělení systémů**: TTTS, analytická část a sázková aplikace mají oddělené odpovědnosti, přístupová oprávnění a integrační kontrakt; sázková aplikace nesmí zapisovat do zdrojových dat turnajů ani skóre.
 - **AI bezpečnost**: agenti mají nejmenší nutná oprávnění, read-only přístup k doménovým datům, limity nákladů a času, ochranu proti prompt injection a auditovatelný seznam volání nástrojů.
+- **Predikce**: výpočet je verzovaný, reprodukovatelný z uloženého vstupního snapshotu, oddělený od oficiálního skóre a nesmí blokovat real-time scoring.
+- **AI chat**: konverzační služba musí mít rate limiting, ochranu proti zneužití a prompt injection, řízení nákladů, bezpečné uchování/smazání historie a srozumitelné chování při výpadku modelu nebo zdrojových API.
 
 ## 7. Mimo rozsah (zatím)
 
@@ -231,7 +249,7 @@ Profil hráče navíc zpřístupňuje analytický přehled výkonu: bilanci výh
 7. Která data smí odebírat externí analytický/sázkový projekt a jak bude řešen souhlas, anonymizace a audit?
 8. Které služby budou samostatné mikroservisy v první iteraci (doporučení: API Gateway, Identity/Organization, Player, Tournament, Match/Scoring, Live Score, Analytics, Integration)?
 9. Které části profilu a statistik hráče budou veřejné a které pouze pro organizaci nebo přihlášeného uživatele?
-10. Který model provider bude Semantic Kernel v PoC používat: Vertex AI/Gemini, nebo jiný model přes abstrahovaný konektor?
+10. Který model provider, vektorové úložiště a mechanismus autentizace/transportu pro MCP budou použity v PoC?
 11. Jaký rozsah lokálního prostředí požadujeme: všechny služby včetně emulátorů GCP, nebo zpočátku zjednodušený PoC profil?
 
 ## 9. Rozhodnuto (shrnutí)
@@ -245,7 +263,8 @@ Profil hráče navíc zpřístupňuje analytický přehled výkonu: bilanci výh
 - Statistiky a predikce jsou oddělené od transakčního zápisu skóre a externí sázkový projekt komunikuje s TTTS pouze přes řízené integrační rozhraní.
 - Distribuovaný systém je rozdělený podle domén; každá doménová služba vlastní svou business logiku, data, Docker image a Kubernetes deployment.
 - Dokončené turnaje a oficiální výsledky jsou dostupné v archivu; statistiky hráčů a vzájemné zápasy jsou dostupné v analytickém přehledu i z profilu konkrétního hráče.
-- Multi-agentní AI je experimentální samostatná doména; Semantic Kernel koordinuje read-only agenty nad API Analytics a Archive, bez oprávnění měnit zdrojová data.
+- AI chat je experimentální samostatná Python doména; LangChain/LangGraph koordinují read-only agenty nad API Player, Tournament, Archive, Live Score a Analytics, bez oprávnění měnit zdrojová data.
+- .NET zůstává primární platformou backendu; Semantic Kernel v oddělené .NET službě orchestruje workflow pro live predikce. Odhady poskytuje verzovaný analytický algoritmus/model a nikdy nenahrazují oficiální výsledek.
 - Turnaj trvá nejvýše jeden kalendářní den, každý turnaj má vlastní počet stolů v rozsahu 1–32 a nasazení používá dvojice `i` a `2G-i+1`; ostatní hráči se losují.
 - Ukládá se skóre každého setu i celého zápasu; set musí být vyhraný rozdílem 2 bodů, za výhru v zápase jsou 2 tabulkové body a shody rozhoduje vzájemná minitabulka nebo vzájemný zápas.
 - Local, test, staging a production jsou oddělená prostředí s izolovanými daty a konfigurací; testovací turnaje a hráči se vytvářejí opakovatelným seed procesem.

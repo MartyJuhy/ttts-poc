@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react'
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut, type User } from 'firebase/auth'
 import { changePoint, demoMatches, fetchMatches, verifyAdmin, type LiveMatch } from './api'
 import { firebaseAuth } from './firebase'
+import HistoryPage from './HistoryPage'
 
 type Language = 'cs' | 'en'
 
@@ -10,6 +11,7 @@ const copy = {
     public: 'VEŘEJNÝ PŘEHLED',
     demo: 'UKÁZKOVÁ DATA',
     live: 'PROBÍHÁ',
+    history: 'Historické výsledky',
     club: 'Českomoravský klub veteránů',
     category: 'KATEGORIE',
     location: 'MÍSTO',
@@ -45,6 +47,7 @@ const copy = {
     public: 'PUBLIC SCOREBOARD',
     demo: 'SAMPLE DATA',
     live: 'LIVE',
+    history: 'Historical results',
     club: 'Czech-Moravian Veterans Club',
     category: 'CATEGORY',
     location: 'LOCATION',
@@ -78,7 +81,7 @@ const copy = {
   },
 } as const
 
-function App() {
+function ScoreboardPage() {
   const [language, setLanguage] = useState<Language>('cs')
   const [matches, setMatches] = useState<LiveMatch[]>(demoMatches)
   const [apiOnline, setApiOnline] = useState(false)
@@ -220,6 +223,11 @@ function App() {
         </div>
       </header>
 
+      <nav className="section-nav" aria-label="TTTS sections">
+        <a aria-current="page" className="is-active" href="/">{text.live}</a>
+        <a href="/history">{text.history}</a>
+      </nav>
+
       {adminPanelOpen && (
         <section className="admin-panel" aria-label={text.adminLogin}>
           {isAdmin ? (
@@ -348,6 +356,10 @@ function App() {
       </footer>
     </main>
   )
+}
+
+function App() {
+  return window.location.pathname === '/history' ? <HistoryPage /> : <ScoreboardPage />
 }
 
 export default App
