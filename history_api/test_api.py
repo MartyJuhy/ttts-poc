@@ -1,7 +1,9 @@
+import os
 import random
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
@@ -27,7 +29,9 @@ class HistoryApiTests(unittest.TestCase):
         session_factory = sessionmaker(bind=engine, expire_on_commit=False)
 
         app = create_app()
-
+        patcher = mock.patch.dict(os.environ, {"CHAT_ENABLED": "true"})
+        patcher.start()
+        self.addCleanup(patcher.stop)
         def override_session():
             with session_factory() as session:
                 yield session
@@ -295,6 +299,19 @@ class HistoryApiTests(unittest.TestCase):
             result = self.chat(text)
             self.assertTrue(result["matches"], text)
             self.assertIn(player["name"], result["reply"])
+
+    def test_chat_is_disabled_by_default_and_returns_503(self) -> None:
+        with mock.patch.dict(os.environ, clear=False):
+            os.environ.pop("CHAT_ENABLED", None)
+            response = self.client.post("/api/history/chat", json={"message": "Jan Novák"})
+            self.assertEqual(response.status_code, 503)
+            os.environ["CHAT_ENABLED"] = "false"
+            response = self.client.post("/api/history/chat", json={"message": "Jan Novák"})
+            self.assertEqual(response.status_code, 503)
+
+    def test_other_endpoints_work_when_chat_is_disabled(self) -> None:
+        with mock.patch.dict(os.environ, {"CHAT_ENABLED": "false"}):
+            self.assertEqual(self.client.get("/api/history/matches").status_code, 200)
 
     def test_chat_answers_with_seeded_player_results(self) -> None:
         response = self.client.post(
