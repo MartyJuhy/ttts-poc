@@ -19,7 +19,7 @@ python -m history_api.seed
 python -m uvicorn history_api.main:app --reload --port 8000
 ```
 
-Open `/history` in the Vite app to browse the seeded players, tournaments, and 200 historical matches. The history API is proxied separately from the existing `/api` routes. In the Cloud Run image, the SQLite database is built from the same seed and included read-only as demo data; no Cloud SQL instance is needed for this POC.
+Open `/history` in the Vite app to browse the seeded players, tournaments, and 1,260 historical matches. Each of the 20 tournaments (one per day) has 32 of the 200 players: 8 groups of 4 (round robin), then a random-draw knockout of the top two from each group. The history API is proxied separately from the existing `/api` routes. In the Cloud Run image, the SQLite database is built from the same seed and included read-only as demo data; no Cloud SQL instance is needed for this POC.
 
 Run the API tests with `python -m unittest history_api.test_api -v`.
 

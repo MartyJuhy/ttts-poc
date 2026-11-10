@@ -190,7 +190,7 @@ def create_app() -> FastAPI:
         player_id: int | None = None,
         opponent_id: int | None = None,
         search: Annotated[str, Query(max_length=100)] = "",
-        limit: Annotated[int, Query(ge=1, le=500)] = 200,
+        limit: Annotated[int, Query(ge=1, le=2000)] = 200,
         offset: Annotated[int, Query(ge=0)] = 0,
     ) -> MatchesResponse:
         records = list(
