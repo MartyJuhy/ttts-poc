@@ -1,0 +1,10 @@
+.git
+.firebase
+node_modules
+dist
+**/bin
+**/obj
+history_api/data/*.db
+__pycache__
+**/__pycache__
+*.py[cod]

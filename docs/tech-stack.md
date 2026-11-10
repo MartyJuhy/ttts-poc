@@ -8,11 +8,17 @@
 |---|---|
 | Divácký web (frontend) | Angular (SPA) |
 | TTTS web (frontend) | Angular (SPA) — veřejná divácká část + přihlášená admin sekce |
+| AI chat klient | Angular widget v pravém dolním rohu veřejného webu |
 | API Gateway / BFF | ASP.NET Core (.NET 8/9, C#) |
+| AI Chat/Agent Service | Python + LangChain + LangGraph; samostatný kontejner a API pro webový chat |
+| Live Match Prediction Service | .NET/C# + Semantic Kernel; samostatný kontejner pro orchestraci predikce rozehraného zápasu |
+| Predikční algoritmus/model | Verzionovaný deterministický výpočet nebo ML model; Semantic Kernel jej orchestruje, nenahrazuje |
+| MCP integrace | MCP-kompatibilní read-only server/adaptér pro doménové nástroje `[K OVĚŘENÍ]` |
 | Mobilní app (rozhodčí) | .NET MAUI (Android + iOS) |
 | Sázková webová aplikace (PoC) | Samostatná webová SPA `[K OVĚŘENÍ: Angular nebo jiný frontend]` |
 | Sázkový backend (PoC) | Samostatná ASP.NET Core služba `[K OVĚŘENÍ]` |
 | Relační data | Cloud SQL for PostgreSQL; logicky oddělené databáze/schémata podle služby `[K OVĚŘENÍ]` |
+| Vektorové úložiště pro RAG | PostgreSQL/pgvector v Cloud SQL jako výchozí varianta `[K OVĚŘENÍ]` |
 | Live skóre / real-time vrstva | Firestore (Google Cloud) |
 | Hosting API | GKE Autopilot (Docker containers) |
 | Hosting SPA | Firebase Hosting (nebo Cloud Storage + Cloud CDN) |
@@ -24,7 +30,8 @@
 | Container registry | Artifact Registry |
 | Asynchronní události | Pub/Sub |
 | Analytika / ML | BigQuery + Vertex AI `[K OVĚŘENÍ]` |
-| Agent orchestrace | Semantic Kernel (.NET) + konfigurovatelný model provider `[K OVĚŘENÍ: Vertex AI/Gemini nebo jiný provider]` |
+| Chat orchestrace / RAG | LangChain + LangGraph (Python), MCP nástroje, vektorové vyhledávání a konfigurovatelný model provider `[K OVĚŘENÍ: Vertex AI/Gemini nebo jiný provider]` |
+| .NET AI orchestrace | Semantic Kernel pro workflow live predikce a volání doménových/analytických funkcí |
 | Integrace se sázkovou aplikací | Verzované API a/nebo Pub/Sub, pouze schválená data |
 | Lokální orchestrace | Docker Compose; volitelně kind/k3d pro lokální Kubernetes PoC |
 | Lokální GCP závislosti | Emulátory nebo lokální náhrady pro PostgreSQL, Firestore/Pub/Sub podle dostupnosti |
@@ -36,8 +43,13 @@
 
 ## 2. Proč tato kombinace
 
-- **.NET/C#** jednotně pro backend (Web API) i mobil (MAUI) — sdílené DTO/modely, jedna jazyková platforma napříč týmem, jak jsi preferoval.
+- **.NET/C# zůstává primární platformou** pro backendové API, doménové služby a mobilní MAUI aplikaci.
+- **Semantic Kernel** se používá v samostatné .NET Live Match Prediction Service pro orchestraci načtení kontextu zápasu a volání predikčního výpočtu/modelu. SK sám není predikční algoritmus ani ML model.
+- **Python pro AI chat** je samostatná, cílená výjimka z .NET backendu kvůli požadovanému použití LangChain a LangGraph; běží ve vlastním kontejneru a komunikuje s doménami přes verzovaná API, bez přímého přístupu k jejich databázím.
 - **Angular SPA** pro web (divák i admin) komunikující s Web API přes REST/JSON.
+- **LangChain + LangGraph** obsluhují pouze konverzační workflow webového chatu, nástroje a RAG. LangGraph drží stav běhu workflow; historie konverzace se ukládá odděleně od oficiálních turnajových dat a řídí se retenčními pravidly.
+- **Oddělení AI komponent**: Python chat může přes read-only API načíst výsledky .NET predikční služby a srozumitelně je vysvětlit. Nevypočítává ani neukládá vlastní alternativní predikci; Semantic Kernel zase neobsluhuje chatovou historii ani RAG workflow.
+- **RAG a vektorové úložiště** doplňují odpovědi o pravidla, vysvětlivky a další schválený text. Oficiální výsledky, live skóre a statistiky se vždy načítají z API/čtecích modelů; embeddingy nejsou jejich zdrojem pravdy.
 - **Samostatná sázková aplikace** komunikuje s TTTS pouze přes integrační kontrakt. Nemá přímý přístup do Cloud SQL ani Firestore a nemůže zapisovat skóre nebo měnit turnaje.
 - **GCP jako primární cloud** — snaha maximálně využít nativní managed služby.
 - **Firestore pro live skóre** — účelově jiná databáze než hlavní relační úložiště, protože:
@@ -48,7 +60,7 @@
 - **Sázkový model**: sázková aplikace si spravuje vlastní uživatele, testovací sázky a jejich stav. Z TTTS pouze čte publikované zápasy, predikce a schválené statistiky.
 - **Distribuovaný model**: každá doménová služba má vlastní lifecycle, Docker image, Kubernetes deployment, API kontrakt a vlastnictví dat. V PoC může více služeb běžet nad jednou Cloud SQL instancí, ale nesmí sdílet tabulky bez jasného vlastníka; později je lze přesunout do samostatných databází.
 - **Prostředí**: local, test, staging a production jsou oddělené deploymenty a datové prostory. Na GCP doporučujeme minimálně samostatné projekty `ttts-test`, `ttts-staging` a `ttts-prod`; local běží mimo GCP přes Docker Compose.
-- **Lokální vývoj**: Docker Compose spouští všechny PoC mikroservisy, databáze, message broker, analytickou službu, agent orchestration a sázkový backend. Pro ověření Kubernetes manifestů lze stejný systém nasadit do kind/k3d.
+- **Lokální vývoj**: Docker Compose spouští PoC mikroservisy, databáze, message broker, analytickou službu, Python chat, .NET/Semantic Kernel predikční službu a sázkový backend. Pro ověření Kubernetes manifestů lze stejný systém nasadit do kind/k3d.
 - **Data se seedují**: seed runner nebo CLI vytvoří předvídatelné organizace, hráče, turnaje, zápasy, výsledky, statistiky a predikce. Seed je verzovaný, opakovatelný a podporuje reset.
 - **GitHub Actions + GCP**: pull request spustí build, testy, security scan, Docker build a validaci manifestů. Merge do `main` publikuje immutable images do Artifact Registry a nasadí test. Staging a production používají chráněné GitHub Environments s approval.
 - **Bezpečná autentizace CI/CD**: GitHub Actions se do GCP přihlašuje přes OIDC/Workload Identity Federation s minimálními rolemi. Service-account JSON klíče se neukládají do repozitáře ani do GitHub Secrets.
@@ -71,7 +83,9 @@ Kvůli požadavku na distribuovaný systém budou služby baleny jako samostatn�
 - **Match/Scoring Service** — zápasy, validace bodů, setů a zápasů; vlastní oficiální výsledky.
 - **Live Score Service** — projekce aktuálního skóre do Firestore a real-time distribuce klientům.
 - **Analytics Service** — čtecí modely statistik hráčů, historie vzájemných zápasů, forma, feature data a predikce přes Vertex AI; data lze znovu sestavit z archivu.
-- **Agent Orchestration Service** — experimentální multi-agentní workflow se Semantic Kernel; pouze read-only nástroje nad Player, Archive a Analytics API.
+- **Live Match Prediction Service** — samostatná .NET služba se Semantic Kernel; orchestruje načtení live snapshotu a historických statistik a volá verzovaný predikční algoritmus/model. Predikci publikuje přes API/událost, nikdy nezapisuje skóre.
+- **AI Chat/Agent Service** — samostatná Python služba s LangChain/LangGraph pro chat a vícekroková workflow; pouze read-only nástroje nad Player, Tournament, Archive, Live Score a Analytics API. Pro vnější integrace může vystavit nebo použít MCP-kompatibilní adaptér.
+- **AI Chat UI** — Angular widget v pravém dolním rohu veřejného webu, který streamuje konverzaci s AI Chat/Agent Service; při nedostupnosti AI nesmí blokovat ostatní webové funkce.
 - **Integration Service** — verzované exportní API a Pub/Sub události pro schválené externí odběratele.
 - **Betting Service (samostatný projekt)** — vlastní uživatelé a testovací sázky; není součástí doménového jádra TTTS.
 
@@ -127,17 +141,17 @@ Seed data jsou samostatná verzovaná komponenta, například `SeedRunner` nebo 
 - vytvořit několik organizací a registrovaných hráčů s profily,
 - vytvořit historické dokončené turnaje a vzájemné zápasy,
 - vytvořit právě probíhající turnaj s rozlosováním, stoly a živým skóre,
-- vytvořit výsledky vhodné pro Analytics/ML a Semantic Kernel agenty,
+- vytvořit výsledky vhodné pro Analytics/ML a LangChain/LangGraph agenty,
 - naplnit testovací predikce a data pro sázkový PoC,
 - provést idempotentní seed, reset a případně seed konkrétního scénáře.
 
 Seed účty a testovací secrets nesmí být použity v produkci. Produkce používá pouze explicitní migrační a importní proces s auditní stopou.
 
-Služby komunikují synchronně přes interní REST/gRPC rozhraní jen tam, kde je potřeba okamžitá odpověď; uzavření turnaje a dokončení zápasů publikují přes Pub/Sub. Analytics, Agent Orchestration, Integration a Betting Service proto nejsou v kritické cestě zápisu bodu. Přímé sdílení databází mezi službami není dovoleno. Profil hráče a analytické přehledy čtou z optimalizovaných projekcí Analytics Service, nikoliv přímým dotazem do databáze Match/Scoring Service.
+Služby komunikují synchronně přes interní REST/gRPC rozhraní jen tam, kde je potřeba okamžitá odpověď; uzavření turnaje, dokončení zápasů a podle potřeby změny live skóre publikují přes Pub/Sub. Analytics, Live Match Prediction, AI Chat/Agent, Integration a Betting Service proto nejsou v kritické cestě zápisu bodu. Přímé sdílení databází mezi službami není dovoleno. Profil hráče a analytické přehledy čtou z optimalizovaných projekcí Analytics Service, nikoliv přímým dotazem do databáze Match/Scoring Service.
 
-### 3.2 Multi-agentní PoC
+### 3.2 AI chat a multi-agentní PoC (Python)
 
-Agent Orchestration Service běží jako samostatný Kubernetes deployment. Semantic Kernel v ní funguje jako orchestrace a plugin/tool vrstva, nikoliv jako náhrada doménových služeb. Agenti používají pouze interní read-only API:
+AI Chat/Agent Service běží jako samostatný Python/Kubernetes deployment. LangChain zajišťuje napojení modelu, promptů, retrieverů a nástrojů; LangGraph řídí stavové workflow a koordinaci agentů, nikoliv doménová data. Agenti používají pouze interní read-only API:
 
 - Orchestrator Agent směruje uživatelský dotaz a řídí workflow.
 - Player History Agent čte archiv hráče a jeho účasti.
@@ -146,13 +160,18 @@ Agent Orchestration Service běží jako samostatný Kubernetes deployment. Sema
 - Prediction Agent načítá výstup Analytics/ML Service.
 - Explanation Agent sestaví odpověď s odkazy na použité zdroje a uvedením nejistoty.
 
-Semantic Kernel plugins nesmí obsahovat přímé databázové přístupy ani mutační nástroje pro scoring, turnaje, hráče nebo sázky. Každé volání pluginu prochází autorizací, limity a auditním logem. V případě nedostupnosti agentní služby musí hlavní TTTS workflow pokračovat bez ní.
+Nástroje ani MCP adaptér nesmí obsahovat přímé databázové přístupy ani mutační operace pro scoring, turnaje, hráče nebo sázky. Každé volání prochází autorizací, limity a auditním logem. Vektorové úložiště obsahuje pouze schválené textové podklady; doménová fakta a predikce se ověřují přes API. Historie konverzace je oddělená od systémového auditu, přístupná pouze oprávněnému uživateli a lze ji smazat. Při nedostupnosti chatové služby musí hlavní TTTS workflow pokračovat bez ní.
+
+### 3.3 Live predikce zápasu (.NET/Semantic Kernel)
+
+Live Match Prediction Service běží jako samostatný .NET/Kubernetes deployment. Pub/Sub nebo interní API jí předá změny live stavu; služba načte potřebné historické statistiky přes Analytics API, zavolá verzovaný algoritmus/model a publikuje výsledek přes interní API nebo doménovou událost. Semantic Kernel orchestruje kroky a nástroje; pravděpodobnost výhry počítá predikční komponenta. Predikce se ukládá jako odvozený, verzovaný výsledek oddělený od oficiálního skóre. Chat ji smí načíst pouze read-only API.
 
 ```mermaid
 flowchart LR
     subgraph Clients
         MobileApp[".NET MAUI\n(rozhodčí)"]
         TTTSWeb["Angular TTTS Web\n(public + admin)"]
+        Chat["AI chat widget\n(pravý dolní roh)"]
         BettingWeb["Samostatná sázková\nwebová aplikace"]
     end
 
@@ -166,7 +185,11 @@ flowchart LR
         BQ["BigQuery"]
         Vertex["Vertex AI"]
         Artifact["Artifact Registry"]
-        Agents["Agent Orchestration\nSemantic Kernel"]
+        Agents["Agent Orchestration\nPython + LangChain/LangGraph"]
+        Predictor["Live Match Prediction\n.NET + Semantic Kernel"]
+        Model["Versioned predictor\nalgorithm / ML model"]
+        VectorDB[("Vector store\npgvector / RAG")]
+        MCP["MCP tools/adaptér\n(read-only)"]
         BettingAPI["Sázkový backend\n(PoC)"]
     end
 
@@ -179,8 +202,15 @@ flowchart LR
     Events --> BQ
     BQ --> Vertex
     Vertex --> Events
-    TTTSWeb -- "profil / analytický dotaz" --> Agents
+    TTTSWeb --> Chat
+    Chat -- "chat API / stream" --> Agents
     Agents -- "read-only API tools" --> API
+    Agents -- "retrieval" --> VectorDB
+    Agents -- "MCP tools" --> MCP
+    MCP -- "read-only API" --> API
+    Events -- "live match updates" --> Predictor
+    Predictor -- "orchestrated prediction call" --> Model
+    Predictor -- "publish prediction via API/event" --> API
     Artifact -. "Docker images" .-> GKE
     Events -. "schválená data" .-> BettingAPI
     BettingWeb -- "REST (zápasy, predikce, testovací sázky)" --> BettingAPI
@@ -213,7 +243,7 @@ flowchart LR
 8. Kontrakt integračních událostí a API pro externí projekt: verze, autentizace, limity, anonymizace a dostupná granularita dat.
 9. BigQuery/Vertex AI pipeline: frekvence přepočtu statistik, minimální množství dat pro predikce a způsob evidence verze modelu.
 10. Bude sázkový PoC pouze simulovat sázky bez peněz, nebo bude mít i testovací zůstatek/virtuální měnu?
-11. Jaký model provider bude použit pro Semantic Kernel a jak budou řešeny limity tokenů, náklady a ukládání promptů/odpovědí?
+11. Jaké model providery použijeme pro Python chat a .NET/Semantic Kernel workflow, jaké vektorové úložiště zvolíme a jak budou řešeny limity, náklady a retence historie?
 12. Budou test a staging provozované v jednom GKE clusteru v oddělených namespacech, nebo ve vlastních clusterech/projektech?
 13. Které GCP služby budeme lokálně emulovat a které nahradíme lokální komponentou (např. Pub/Sub emulátor vs. RabbitMQ/Redis)?
 11. Jaké přesné predikce budou v první verzi (vítěz zápasu, výsledek 3:0/3:1/3:2, počet setů nebo jiné)?
