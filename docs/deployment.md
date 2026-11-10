@@ -4,7 +4,9 @@
 
 React + Vite vytváří statické soubory v `dist/`, které Firebase Hosting servíruje na `https://ttts-poc.web.app`. ASP.NET Core API běží na Cloud Run. Veřejný endpoint čte zápasy; změna skóre vyžaduje Firebase ID token a UID jediného nakonfigurovaného admina. API používá Firestore, který při prvním čtení naplní verzovanými demo zápasy, pokud je kolekce `matches` prázdná.
 
-Pull request do `main` buildí web a spouští API unit testy, ale nenasazuje. Push nebo merge do `main` sestaví image API, nasadí API na Cloud Run, sestaví web s URL API a publikuje web do Firebase Hosting.
+Pull request do `main` buildí web a spouští .NET i Python (history API) testy, ale nenasazuje. Push nebo merge do `main` sestaví image obou API, nasadí je na Cloud Run (`ttts-api` a `ttts-history-api`), sestaví web s jejich URL (`VITE_API_BASE_URL`, `VITE_HISTORY_API_BASE_URL`) a publikuje web do Firebase Hosting.
+
+Historické výsledky obsluhuje FastAPI `ttts-history-api` se SQLite seed databází zabudovanou read-only v image (bez Cloud SQL). Používá stejný runtime účet `ttts-api-runtime`; CORS povoluje `https://ttts-poc.web.app`.
 
 Veřejný `GET /api/matches` čte scoreboard. `POST /api/matches/{id}/score` přidá nebo odebere jeden bod aktuálního setu; endpoint kontroluje Firebase ID token, admin UID, živý stav zápasu, nezáporné skóre a verzi zápasu. Počty vyhraných setů jsou v této první iteraci jen zobrazené, zatím se automaticky nepřepočítávají.
 

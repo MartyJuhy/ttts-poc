@@ -25,6 +25,18 @@ jobs:
       - name: Build ASP.NET API
         run: dotnet test api.Tests/api.Tests.csproj --configuration Release
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: history_api/requirements-dev.txt
+
+      - name: Test history API
+        run: |
+          python -m pip install -r history_api/requirements-dev.txt
+          python -m unittest history_api.test_api -v
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -91,6 +103,31 @@ jobs:
           url="$(gcloud run services describe ttts-api --project="$PROJECT_ID" --region="$REGION" --format='value(status.url)')"
           echo "url=$url" >> "$GITHUB_OUTPUT"
 
+      - name: Build and publish history API image
+        id: history-image
+        run: |
+          image="$REGION-docker.pkg.dev/$PROJECT_ID/$IMAGE_REPOSITORY/ttts-history-api:$GITHUB_SHA"
+          docker build --file history_api/Dockerfile --tag "$image" .
+          docker push "$image"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy history API to Cloud Run
+        run: |
+          gcloud run deploy ttts-history-api \
+            --project="$PROJECT_ID" \
+            --region="$REGION" \
+            --image="${{ steps.history-image.outputs.image }}" \
+            --service-account="$RUNTIME_SERVICE_ACCOUNT" \
+            --allow-unauthenticated \
+            --min=0 \
+            --max=2
+
+      - name: Read history API URL
+        id: history-url
+        run: |
+          url="$(gcloud run services describe ttts-history-api --project="$PROJECT_ID" --region="$REGION" --format='value(status.url)')"
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -103,6 +140,7 @@ jobs:
       - name: Build web with deployed API URL
         env:
           VITE_API_BASE_URL: ${{ steps.api-url.outputs.url }}
+          VITE_HISTORY_API_BASE_URL: ${{ steps.history-url.outputs.url }}
           VITE_FIREBASE_API_KEY: ${{ vars.VITE_FIREBASE_API_KEY }}
           VITE_FIREBASE_AUTH_DOMAIN: ttts-poc.firebaseapp.com
           VITE_FIREBASE_PROJECT_ID: ttts-poc
