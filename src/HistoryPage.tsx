@@ -76,6 +76,7 @@ const translations = {
     send: 'Odeslat',
     thinking: 'Hledám v historických výsledcích…',
     chatError: 'Dotaz se nepodařilo zpracovat. Zkontrolujte připojení k API.',
+    chatDisabled: 'Chat je momentálně vypnutý. Zapíná se jen při předvádění aplikace.',
     emptyChat: 'Zatím žádné zprávy. Zkuste se zeptat na zápasy hráče.',
     sets: 'Sety',
     prevPage: 'Předchozí',
@@ -115,6 +116,7 @@ const translations = {
     send: 'Send',
     thinking: 'Searching historical results…',
     chatError: 'Could not process the question. Check the API connection.',
+    chatDisabled: 'The chat is currently turned off. It is only enabled during demos.',
     emptyChat: 'No messages yet. Ask about a player’s matches.',
     sets: 'Sets',
     prevPage: 'Previous',
@@ -278,6 +280,10 @@ export default function HistoryPage() {
           player_id: selectedPlayer ? Number(selectedPlayer) : null,
         }),
       })
+      if (response.status === 503) {
+        setMessages((current) => [...current, { role: 'assistant', text: text.chatDisabled }])
+        return
+      }
       if (!response.ok) throw new Error(`History API returned ${response.status}`)
       const result = await response.json() as { reply: string; matches: HistoricalMatch[] }
       setMessages((current) => [...current, { role: 'assistant', text: result.reply, matches: result.matches }])

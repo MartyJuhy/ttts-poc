@@ -1,10 +1,11 @@
+import os
 import re
 import unicodedata
 from dataclasses import dataclass
 from datetime import date
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, Query
+from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from sqlalchemy import Select, and_, or_, select
@@ -213,6 +214,11 @@ def head_to_head_reply(first: Mention, second: Mention, records: list[Match]) ->
     return " ".join(parts)
 
 
+def chat_enabled() -> bool:
+    # Read per request so the Cloud Run env var can be flipped without code changes.
+    return os.getenv("CHAT_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def create_app() -> FastAPI:
     app = FastAPI(title="TTTS Historical Results API", version="0.1.0")
     app.add_middleware(
@@ -308,6 +314,8 @@ def create_app() -> FastAPI:
         request: ChatRequest,
         session: Annotated[Session, Depends(get_session)],
     ) -> ChatResponse:
+        if not chat_enabled():
+            raise HTTPException(status_code=503, detail="Chat is currently disabled.")
         all_players = list(session.scalars(select(Player)))
         mentions = find_mentions(request.message, all_players)
 
